@@ -1,0 +1,30 @@
+/* Voicible — Global styles / "Every voice, made visible." */
+
+:root {
+  --voicible-primary: #2D6BE4;
+  --voicible-navy: #1A1A2E;
+  --voicible-teal: #00D4AA;
+  --voicible-text: #F2F3F7;
+  --voicible-text-dim: #9AA0B4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--voicible-navy);
+  color: var(--voicible-text);
+  font-family: 'Inter', system-ui, sans-serif;
+  overflow: hidden;
+}
+
+button, input, select {
+  font-family: inherit;
+}

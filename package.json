@@ -1,0 +1,32 @@
+{
+  "name": "voicible",
+  "version": "2.0.0",
+  "description": "Voicible — real-time speech-to-sign-language interpreter powered by real motion-capture ASL data. \"Every voice, made visible.\"",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server/index.js",
+    "server": "node server/index.js",
+    "indexer": "python3 sign_processor/mocap_indexer.py",
+    "client": "npm run dev --prefix client",
+    "client:build": "npm run build --prefix client",
+    "install:client": "npm install --prefix client",
+    "dev": "concurrently -n indexer,server,client -c magenta,blue,green \"npm run indexer\" \"npm run server\" \"npm run client\""
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "fbx2gltf": "^0.9.7",
+    "fuse.js": "^7.0.0",
+    "node-fetch": "^3.3.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+

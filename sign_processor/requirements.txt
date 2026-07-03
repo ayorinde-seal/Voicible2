@@ -1,0 +1,3 @@
+# Voicible — Python dependencies for the mocap indexing microservice
+# "Every voice, made visible."
+flask==3.0.3

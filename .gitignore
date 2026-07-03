@@ -1,0 +1,8 @@
+# Voicible — ignored paths
+node_modules/
+client/node_modules/
+client/dist/
+data/mocap-archive/
+.env
+*.log
+.DS_Store
