@@ -6,3 +6,7 @@ data/mocap-archive/
 .env
 *.log
 .DS_Store
+.venv/
+
+# Large 3D avatar model (124MB) — exceeds GitHub 100MB limit; regenerated from main-character.Fbx via the FBX->GLB pipeline
+client/public/models/*.glb

@@ -107,16 +107,28 @@ _index_built_at = None
 _index_stats = {"wordsIndexed": 0, "lettersIndexed": 0}
 
 
-def _canonicalize(raw):
+FUSED_LETTER_VARIANT_PATTERN = re.compile(r"^([A-Za-z])\d+$")
+
+
+def _canonicalize(raw, is_fingerspelling=False):
     """Turns an Upload folder's word-and-tags group into a canonical
     lookup key: strips parenthetical annotations entirely, then strips
     trailing variant-tag tokens (Alt/Var/Variant/Ext) and bare trailing
     take/variant numbers, stopping at the first token that isn't one of
-    those (so multi-word phrases like "Church Teaching" stay intact)."""
+    those (so multi-word phrases like "Church Teaching" stay intact).
+    For fingerspelling only, also collapses a single letter fused with
+    its take number with no separating space (e.g. archive folder "P2"
+    meaning letter P, take 2) down to the bare letter — a naming quirk
+    isolated to this dataset that would be unsafe to apply to dictionary
+    words (e.g. a real word like "K9")."""
     no_parens = re.sub(r"\(.*?\)", "", raw).strip()
     tokens = no_parens.split()
     while tokens and (tokens[-1].upper() in VARIANT_TAG_TOKENS or tokens[-1].isdigit()):
         tokens.pop()
+    if is_fingerspelling and len(tokens) == 1:
+        m = FUSED_LETTER_VARIANT_PATTERN.match(tokens[0])
+        if m:
+            tokens[0] = m.group(1)
     return " ".join(tokens).upper()
 
 
@@ -171,7 +183,15 @@ def _build_entry(upload_dir, word, date_version):
     (file + target frame), facial shapekey curves, and summary stats."""
     keypose_files = []
     for filepath in glob.glob(os.path.join(upload_dir, "**", "*.json"), recursive=True):
-        m = KEYPOSE_FILENAME_PATTERN.search(os.path.basename(filepath))
+        basename = os.path.basename(filepath)
+        if "metarig" in basename.lower():
+            # Auxiliary A-pose/T-pose retargeting reference files, not real
+            # keyposes — they happen to share the "_P<N>.json" suffix
+            # convention (seen starting with the "Diabetes Alt" 2026-6-29
+            # upload), so they'd otherwise be miscounted as 3x the actual
+            # keyposes and corrupt playback timing.
+            continue
+        m = KEYPOSE_FILENAME_PATTERN.search(basename)
         if m:
             keypose_files.append((int(m.group(1)), filepath))
     keypose_files.sort(key=lambda t: t[0])
@@ -214,10 +234,11 @@ def _build_entry(upload_dir, word, date_version):
     }
 
 
-def _scan_folder(root_path):
+def _scan_folder(root_path, is_fingerspelling=False):
     """Walks a folder tree looking for "SG ASL <word> <date> Upload"
     directories at any depth, building word -> entry, keeping only the
-    newest dated version of each canonical word."""
+    newest dated version of each canonical word that actually has
+    exported pose data."""
     found = {}
     if not os.path.isdir(root_path):
         log.warning(f"Archive subfolder not found, skipping: {root_path}")
@@ -229,7 +250,7 @@ def _scan_folder(root_path):
             if not m:
                 continue
             raw_word, date_str = m.groups()
-            word = _canonicalize(raw_word)
+            word = _canonicalize(raw_word, is_fingerspelling=is_fingerspelling)
             if not word:
                 continue
 
@@ -240,12 +261,20 @@ def _scan_folder(root_path):
                 log.warning(f"Unparseable date '{date_str}' in folder '{dirname}', skipping")
                 continue
 
+            upload_dir = os.path.join(dirpath, dirname)
+            entry = _build_entry(upload_dir, word, date_version.date().isoformat())
+            if not entry["keyposes"]:
+                # Archive entry has no exported Poses/JSON (source .blend
+                # never got exported) — unusable for playback. Skip it so
+                # it can never win over a real version, and so the word
+                # falls back to fingerspelling if no version has poses.
+                log.warning(f"Skipping '{dirname}': no exported pose JSON, entry would be unusable")
+                continue
+
             existing = found.get(word)
             if existing is not None and date_version <= existing["_comparable"]:
                 continue  # an already-indexed newer (or equal) version wins
 
-            upload_dir = os.path.join(dirpath, dirname)
-            entry = _build_entry(upload_dir, word, date_version.date().isoformat())
             entry["_comparable"] = date_version
             found[word] = entry
 
@@ -265,7 +294,7 @@ def build_index():
     new_word_index = _scan_folder(dict_root)
 
     log.info(f"Indexing fingerspelling letters/numbers from: {fingerspelling_root}")
-    new_letter_index = _scan_folder(fingerspelling_root)
+    new_letter_index = _scan_folder(fingerspelling_root, is_fingerspelling=True)
 
     with _index_lock:
         _word_index = new_word_index

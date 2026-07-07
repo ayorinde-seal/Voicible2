@@ -12,7 +12,13 @@ import { logger } from '../utils/logger.js';
 let wss = null;
 const clients = new Set();
 
-export function startBroadcaster(server) {
+// `onAudioChunk(buffer)` receives every binary frame a connected client
+// sends — the client only ever sends binary for one reason: mic audio
+// (client/src/audio/micCapture.js), raw int16 PCM @ 16kHz. Text frames
+// aren't expected from clients at all today (the connection is otherwise
+// broadcast-only, server -> client), so binary is a safe, unambiguous
+// signal without needing a message envelope/type tag.
+export function startBroadcaster(server, onAudioChunk) {
   wss = server ? new WebSocketServer({ server }) : new WebSocketServer({ port: config.wsPort });
 
   wss.on('connection', (socket) => {
@@ -28,6 +34,12 @@ export function startBroadcaster(server) {
         connected: true,
       },
     }));
+
+    socket.on('message', (data, isBinary) => {
+      if (isBinary && onAudioChunk) {
+        onAudioChunk(data);
+      }
+    });
 
     socket.on('close', () => {
       clients.delete(socket);

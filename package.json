@@ -7,11 +7,12 @@
   "scripts": {
     "start": "node server/index.js",
     "server": "node server/index.js",
-    "indexer": "python3 sign_processor/mocap_indexer.py",
+    "indexer": ".venv/bin/python3 sign_processor/mocap_indexer.py",
+    "whisper-live": ".venv/bin/python3 sign_processor/run_whisper_live.py",
     "client": "npm run dev --prefix client",
     "client:build": "npm run build --prefix client",
     "install:client": "npm install --prefix client",
-    "dev": "concurrently -n indexer,server,client -c magenta,blue,green \"npm run indexer\" \"npm run server\" \"npm run client\""
+    "dev": "concurrently -n indexer,whisper-live,server,client -c magenta,yellow,blue,green \"npm run indexer\" \"npm run whisper-live\" \"npm run server\" \"npm run client\""
   },
   "dependencies": {
     "chalk": "^5.3.0",
@@ -19,6 +20,7 @@
     "express": "^4.19.2",
     "fbx2gltf": "^0.9.7",
     "fuse.js": "^7.0.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.50.0",
     "node-fetch": "^3.3.2",
     "ws": "^8.18.0"
   },
@@ -29,4 +31,3 @@
     "node": ">=18"
   }
 }
-

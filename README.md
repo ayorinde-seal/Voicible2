@@ -101,14 +101,19 @@ Use [DownGit](https://downgit.github.io) to download the `SG ASL Dictionary` and
 - Python 3.9+
 - [Ollama](https://ollama.com) running locally (default LLM provider) — `ollama pull llama3`
 - [whisper-live](https://github.com/collabora/WhisperLive) running locally (default STT provider), or an Azure Speech key if using the cloud provider
+  - On macOS, `pip install whisper-live` needs the `portaudio` C library first (`whisper-live` depends on PyAudio even though only its client-side mic capture uses it) — `brew install portaudio` before installing the Python deps below, or the build fails with `portaudio.h file not found`.
 
 ### 2. Install dependencies
 
 ```bash
+python3 -m venv .venv
 npm install
 npm run install:client
-pip install -r sign_processor/requirements.txt --break-system-packages
+.venv/bin/pip install -r sign_processor/requirements.txt
+.venv/bin/pip install whisper-live
 ```
+
+`npm run dev` runs the indexer and whisper-live via `.venv/bin/python3` (see `package.json`), so the venv above is required — a bare system `pip install` won't be picked up.
 
 ### 3. Configure
 
@@ -134,13 +139,16 @@ To get a real rendered avatar today, you have three options, roughly in order of
 npm run dev
 ```
 
-This starts the Python indexer, the Node server, and the Vite client dev server together. Or run them individually:
+This starts the Python indexer, the local whisper-live STT server, the Node server, and the Vite client dev server together. Or run them individually:
 
 ```bash
-npm run indexer   # sign_processor/mocap_indexer.py — must be running for lookups to work
-npm run server    # server/index.js
-npm run client    # client dev server (Vite)
+npm run indexer       # sign_processor/mocap_indexer.py — must be running for lookups to work
+npm run whisper-live  # sign_processor/run_whisper_live.py — local STT; first run downloads the model (~250MB for small.en)
+npm run server        # server/index.js
+npm run client        # client dev server (Vite)
 ```
+
+whisper-live's model download only happens once (cached under `~/.cache/huggingface`); on a first `npm run dev` the STT connection will show a few reconnect attempts in the server log until the model finishes loading — that's expected, not an error to chase.
 
 ### 6. Confirm Phase 1 before touching the avatar
 

@@ -22,6 +22,14 @@ export const config = {
   whisperLiveModel: process.env.WHISPER_LIVE_MODEL || 'small.en',
   azureSpeechKey: process.env.AZURE_SPEECH_KEY || '',
   azureSpeechRegion: process.env.AZURE_SPEECH_REGION || 'southafricanorth',
+  // Controls how Azure Speech decides a spoken phrase has ended and emits
+  // a final (not just partial) transcript. "Semantic" (the default) uses
+  // an AI model to infer natural phrase boundaries from content rather
+  // than pure silence duration, and per Azure's own docs takes no
+  // adjustable parameters — azureSegmentationSilenceTimeoutMs below is
+  // ignored in that mode and only takes effect if this is set to "Time".
+  azureSegmentationStrategy: process.env.AZURE_SEGMENTATION_STRATEGY || 'Semantic',
+  azureSegmentationSilenceTimeoutMs: parseInt(process.env.AZURE_SEGMENTATION_SILENCE_TIMEOUT_MS || '500', 10),
 
   // LLM (gloss conversion ONLY — never motion synthesis)
   llmProvider: process.env.LLM_PROVIDER || 'ollama',
@@ -30,12 +38,25 @@ export const config = {
   azureOpenAIEndpoint: process.env.AZURE_OPENAI_ENDPOINT || '',
   azureOpenAIDeployment: process.env.AZURE_OPENAI_DEPLOYMENT || '',
   azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY || '',
-  azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION || '2024-02-01',
+  azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION || '2024-10-21',
 
   // Sign data
   mocapArchivePath: process.env.MOCAP_ARCHIVE_PATH || './data/mocap-archive',
   mocapIndexerUrl: process.env.MOCAP_INDEXER_URL || 'http://localhost:5001',
   vocabularyDomain: process.env.VOCABULARY_DOMAIN || 'church',
+
+  // How long (ms) a partial transcript must stop growing before we treat
+  // whatever's new since the last processed chunk as ready to gloss+sign
+  // — decouples avatar responsiveness from the STT provider's own
+  // finalization timing (Azure's "Semantic" segmentation strategy in
+  // particular can go a long time without ever emitting a final result).
+  // See createUtteranceChunker() in server/index.js.
+  streamChunkIdleMs: parseInt(process.env.STREAM_CHUNK_IDLE_MS || '1200', 10),
+  // Hard ceiling (ms) — flush the current chunk even if speech is still
+  // continuing without a pause long enough to trigger the idle timer
+  // above (confirmed happening in practice: someone talking for 10+
+  // seconds straight without a 1.2s gap anywhere).
+  streamChunkMaxWaitMs: parseInt(process.env.STREAM_CHUNK_MAX_WAIT_MS || '3500', 10),
 
   // Server
   port: parseInt(process.env.PORT || '3000', 10),
