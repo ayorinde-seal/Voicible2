@@ -64,11 +64,21 @@ from datetime import datetime
 
 from flask import Flask, request, jsonify
 
+# SignBank symbolic-sign synthesizer — fallback motion for words the mocap
+# archive lacks (the archive only thoroughly covers ~B/C/D). Same-dir
+# import: sys.path[0] is this file's folder when run as a script.
+import signbank_synth
+
 logging.basicConfig(
     level=logging.INFO,
     format="[Voicible:indexer] %(asctime)s %(levelname)s %(message)s",
 )
 log = logging.getLogger("mocap_indexer")
+
+# A word with no mocap but a SignBank spec at >= this confidence is
+# synthesized rather than fingerspelled. Hand-authored specs (no review
+# entry) always qualify. Lower to expand coverage at some quality cost.
+_SIGNBANK_MIN_CONF = float(os.environ.get("SIGNBANK_MIN_CONF", "0.5"))
 
 app = Flask(__name__)
 
@@ -348,7 +358,19 @@ def _lookup_word(word):
         log.info(f"LOOKUP {word}: found dictionary sign (version={entry['dateVersion']}, {len(entry['keyposes'])} keyposes)")
         return {"found": True, "word": word, "isFingerspelled": False, **_public_entry(entry)}
 
-    # Not in dictionary — attempt fingerspelling fallback.
+    # No mocap — synthesize from the SignBank (the archive covers ~B/C/D
+    # only, so most everyday words land here). Confidence-gated; below the
+    # bar it still fingerspells. A synthesized sign is far more legible
+    # than spelling the word out letter by letter.
+    if signbank_synth.has_word(word, min_conf=_SIGNBANK_MIN_CONF):
+        synth = signbank_synth.synthesize_frames(word)
+        if synth and synth.get("frames"):
+            log.info(f"LOOKUP {word}: no mocap, synthesized from SignBank "
+                     f"({synth['frameCount']} frames, conf={signbank_synth.confidence(word)})")
+            return {"found": True, "word": word, "isFingerspelled": False,
+                    "source": "signbank", "fps": synth["fps"], "frames": synth["frames"]}
+
+    # Not in dictionary or SignBank — attempt fingerspelling fallback.
     letters = _fingerspell(word)
     all_letters_found = all(l["found"] for l in letters) if letters else False
 
@@ -388,7 +410,8 @@ def sequence():
     words = [w for w in re.split(r"[+\s]+", gloss.strip()) if w]
     results = [_lookup_word(w) for w in words]
 
-    found_count = sum(1 for r in results if r["found"] and not r.get("isFingerspelled"))
+    found_count = sum(1 for r in results if r["found"] and not r.get("isFingerspelled") and r.get("source") != "signbank")
+    synth_count = sum(1 for r in results if r["found"] and r.get("source") == "signbank")
     fingerspelled_count = sum(1 for r in results if r["found"] and r.get("isFingerspelled"))
     missing_count = sum(1 for r in results if not r["found"])
     total = len(results) or 1
@@ -396,14 +419,15 @@ def sequence():
     coverage = {
         "total": len(results),
         "found": found_count,
+        "synth": synth_count,
         "fingerspelled": fingerspelled_count,
         "missing": missing_count,
-        "percentFound": round(100 * (found_count + fingerspelled_count) / total, 1),
+        "percentFound": round(100 * (found_count + synth_count + fingerspelled_count) / total, 1),
     }
 
     log.info(
         f"SEQUENCE '{gloss}' -> coverage {coverage['percentFound']}% "
-        f"({found_count} signed, {fingerspelled_count} fingerspelled, {missing_count} missing)"
+        f"({found_count} signed, {synth_count} synth, {fingerspelled_count} fingerspelled, {missing_count} missing)"
     )
 
     return jsonify({"gloss": gloss, "words": results, "coverage": coverage})
@@ -418,6 +442,20 @@ def words():
     with _index_lock:
         word_list = sorted(_word_index.keys())
     return jsonify({"words": word_list, "count": len(word_list)})
+
+
+@app.route("/synth", methods=["GET"])
+def synth():
+    """Synthesize a sign from data/signbank.json for words with no mocap.
+    Returns a flat per-frame stream of arm direction vectors + handshapes
+    the client plays in 'template' mode. found=False when there's no spec."""
+    word = request.args.get("word", "")
+    out = signbank_synth.synthesize_frames(word)
+    if not out:
+        return jsonify({"found": False, "word": word.upper()})
+    out["found"] = True
+    out["confidence"] = signbank_synth.confidence(word)
+    return jsonify(out)
 
 
 @app.route("/reindex", methods=["POST"])

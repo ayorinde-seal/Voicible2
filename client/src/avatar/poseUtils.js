@@ -117,6 +117,9 @@ export function blendFrames(a, b, t) {
   if (!a) return b;
   if (!b) return a;
   if (a.mode !== b.mode) return b;
+  // 'template' frames (synthesized signs) carry frame.joints/handshapes,
+  // not frame.bones — blending them here would drop those fields. Hard-cut.
+  if (b.mode === 'template') return b;
 
   const bones = {};
   const boneNames = new Set([...Object.keys(a.bones || {}), ...Object.keys(b.bones || {})]);

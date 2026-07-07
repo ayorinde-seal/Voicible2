@@ -224,6 +224,38 @@ async function main() {
     }
   });
 
+  // Debug only — synthesize ONE SignBank sign and broadcast it as a
+  // 'template'-mode pose sequence, bypassing STT/LLM/mocap. Lets the
+  // synthesized-sign render path be verified in isolation before it's
+  // wired into the real lookup fallback (Phase 2).
+  app.post('/debug/synth', async (req, res) => {
+    const word = req.body?.word;
+    if (!word || typeof word !== 'string') {
+      return res.status(400).json({ error: 'word (string) is required in the request body' });
+    }
+    try {
+      const r = await fetch(`${config.mocapIndexerUrl}/synth?word=${encodeURIComponent(word)}`);
+      const data = await r.json();
+      if (!data.found) {
+        return res.status(404).json({ error: `no SignBank spec for "${word}"` });
+      }
+      const frames = data.frames.map((f) => ({ ...f, mode: 'template' }));
+      broadcastPoseSequence({
+        gloss: data.word,
+        originalText: data.word,
+        fps: data.fps,
+        frameCount: frames.length,
+        frames,
+        wordBoundaries: [{ word: data.word, startFrame: 0, endFrame: frames.length, found: true, isFingerspelled: false, textOnly: false }],
+        coverage: { total: 1, found: 0, synth: 1, fingerspelled: 0, missing: 0, percentFound: 100 },
+      });
+      res.json({ ok: true, word: data.word, frameCount: frames.length, confidence: data.confidence });
+    } catch (err) {
+      logger.error(`/debug/synth failed for "${word}": ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Serve the built client in production; in development the Vite dev
   // server handles the frontend separately.
   const clientDist = path.resolve(__dirname, '..', 'client', 'dist');

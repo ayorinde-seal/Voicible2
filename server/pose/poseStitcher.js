@@ -275,6 +275,10 @@ function blendTransition(prevFrames, nextFrames, blendLength = BLEND_FRAMES) {
   const prevMode = prevFrames[prevFrames.length - 1]?.mode;
   const nextMode = nextFrames[0]?.mode;
   if (prevMode !== nextMode) return [];
+  // Synthesized 'template' frames carry arm direction vectors (frame.joints)
+  // + handshapes, not the bone quaternions lerpBones expects — hard-cut
+  // rather than blend garbage into/out of them.
+  if (prevMode === 'template') return [];
 
   const n = Math.min(blendLength, prevFrames.length, nextFrames.length);
   const blended = [];
@@ -333,7 +337,15 @@ export async function stitchSequence(sequenceResult) {
   for (const wordResult of sequenceResult.words || []) {
     const startFrame = stitched.length;
 
-    if (wordResult.found && !wordResult.isFingerspelled && wordResult.keyposes) {
+    if (wordResult.source === 'signbank' && Array.isArray(wordResult.frames)) {
+      // Synthesized SignBank sign — arm direction vectors + handshapes,
+      // played by the client's 'template' mode. Passed straight through
+      // (already per-frame from the indexer's synthesizer). blendTransition
+      // hard-cuts across the mocap('world-delta')↔synth('template')
+      // boundary since the modes differ — intended, not a garble.
+      const clip = wordResult.frames.map((f) => ({ ...f, mode: 'template' }));
+      appendClip(stitched, clip, `${wordResult.word} (synth)`);
+    } else if (wordResult.found && !wordResult.isFingerspelled && wordResult.keyposes) {
       const clip = await buildSignFrames(wordResult.uploadFolder, wordResult.keyposes, wordResult.shapeKeyCurves, wordResult.word);
       appendClip(stitched, clip, wordResult.word);
     } else if (wordResult.found && wordResult.isFingerspelled && Array.isArray(wordResult.letters)) {

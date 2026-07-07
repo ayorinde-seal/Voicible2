@@ -2,6 +2,7 @@
 // "Every voice, made visible."
 
 import { Quaternion, Vector3 } from 'three';
+import { getHandShape } from './handShapes.js';
 
 //
 // Maps REAL mocap bone names — confirmed by inspecting an actual
@@ -147,6 +148,7 @@ export function buildBoneLookup(avatarRoot) {
           position: node.position.clone(),
           quaternion: node.quaternion.clone(),
           worldQuaternion: node.getWorldQuaternion(new Quaternion()),
+          eulerZ: node.rotation.z, // rest local Z — baseline for handshape finger curl (template mode)
         };
         REST_POSE.set(node, rest);
         node.userData.__restWorldQuat = rest.worldQuaternion; // debug visibility
@@ -244,9 +246,114 @@ const _tmpVec = new Vector3();
 const _tmpTargetWorld = new Quaternion();
 const _tmpParentWorld = new Quaternion();
 
+// ---- SignBank 'template' mode -------------------------------------------
+// Synthesized signs (server/pose/... source:'signbank') arrive as frames
+// of world-space arm DIRECTION vectors + handshape names, not bone
+// quaternions. This mode aims each arm segment along its target direction
+// (rig-agnostic — works on any bind pose) and curls the fingers into the
+// named handshape. The abstract joints and Kevin's finger bones below
+// come from the first iteration's player, which already targeted this
+// exact CC4 rig. Only the 4 arm segments are direction-driven; head/spine
+// are left at rest for now (they carry ~no signal in the specs).
+const TEMPLATE_ARM_SEGMENTS = [
+  { joint: 'rightShoulder', bone: 'CC_Base_R_Upperarm', child: 'CC_Base_R_Forearm' },
+  { joint: 'rightElbow',    bone: 'CC_Base_R_Forearm',  child: 'CC_Base_R_Hand' },
+  { joint: 'leftShoulder',  bone: 'CC_Base_L_Upperarm', child: 'CC_Base_L_Forearm' },
+  { joint: 'leftElbow',     bone: 'CC_Base_L_Forearm',  child: 'CC_Base_L_Hand' },
+];
+const TEMPLATE_FINGER_BONES = {
+  right: {
+    index:  ['CC_Base_R_Index1', 'CC_Base_R_Index2', 'CC_Base_R_Index3'],
+    middle: ['CC_Base_R_Mid1', 'CC_Base_R_Mid2', 'CC_Base_R_Mid3'],
+    ring:   ['CC_Base_R_Ring1', 'CC_Base_R_Ring2', 'CC_Base_R_Ring3'],
+    pinky:  ['CC_Base_R_Pinky1', 'CC_Base_R_Pinky2', 'CC_Base_R_Pinky3'],
+    thumb:  ['CC_Base_R_Thumb1', 'CC_Base_R_Thumb2', 'CC_Base_R_Thumb3'],
+  },
+  left: {
+    index:  ['CC_Base_L_Index1', 'CC_Base_L_Index2', 'CC_Base_L_Index3'],
+    middle: ['CC_Base_L_Mid1', 'CC_Base_L_Mid2', 'CC_Base_L_Mid3'],
+    ring:   ['CC_Base_L_Ring1', 'CC_Base_L_Ring2', 'CC_Base_L_Ring3'],
+    pinky:  ['CC_Base_L_Pinky1', 'CC_Base_L_Pinky2', 'CC_Base_L_Pinky3'],
+    thumb:  ['CC_Base_L_Thumb1', 'CC_Base_L_Thumb2', 'CC_Base_L_Thumb3'],
+  },
+};
+
+const _segDir = new Vector3();
+const _pA = new Vector3();
+const _pC = new Vector3();
+const _rotQ = new Quaternion();
+const _curWorld = new Quaternion();
+
+// Rotate `bone` so its bone→child segment points along `targetDir` (world
+// space), writing the resulting LOCAL quaternion onto the bone. Ported
+// from the first iteration's _computeLocalTarget — preserves the bone's
+// current roll, works on any rig because it reads live world positions.
+function aimSegment(bone, childBone, targetDir) {
+  bone.getWorldQuaternion(_curWorld);
+  if (childBone) {
+    bone.getWorldPosition(_pA);
+    childBone.getWorldPosition(_pC);
+    _segDir.copy(_pC).sub(_pA).normalize();
+  } else {
+    _segDir.set(0, 1, 0).applyQuaternion(_curWorld);
+  }
+  if (_segDir.lengthSq() < 1e-8 || targetDir.lengthSq() < 1e-8) return;
+  _rotQ.setFromUnitVectors(_segDir, targetDir.clone().normalize());
+  _tmpTargetWorld.multiplyQuaternions(_rotQ, _curWorld); // new world orientation
+  if (bone.parent) bone.parent.getWorldQuaternion(_tmpParentWorld);
+  else _tmpParentWorld.identity();
+  bone.quaternion.copy(_tmpParentWorld).invert().multiply(_tmpTargetWorld);
+  bone.updateMatrixWorld(false);
+}
+
+// Curl one side's fingers into a named handshape. CC finger bones curl
+// around local Z; the left hand mirrors (negated angle). Ported from the
+// first iteration's _applyGLTFHandShape.
+function applyHandShape(side, shapeName, boneLookup) {
+  const shape = getHandShape(shapeName);
+  const bones = TEMPLATE_FINGER_BONES[side];
+  if (!bones) return;
+  const sign = side === 'right' ? 1 : -1;
+  ['index', 'middle', 'ring', 'pinky'].forEach((name, i) => {
+    const segNames = bones[name];
+    shape.f[i].forEach((angle, seg) => {
+      const b = boneLookup[segNames[seg]];
+      const rest = b && REST_POSE.get(b);
+      if (b && rest) b.rotation.z = rest.eulerZ + sign * angle;
+    });
+  });
+  const [spread, curl] = shape.t;
+  const t = bones.thumb;
+  const t0 = boneLookup[t[0]], t1 = boneLookup[t[1]], t2 = boneLookup[t[2]];
+  const r0 = t0 && REST_POSE.get(t0), r1 = t1 && REST_POSE.get(t1), r2 = t2 && REST_POSE.get(t2);
+  if (t0 && r0) t0.rotation.z = r0.eulerZ + sign * spread * 0.5;
+  if (t1 && r1) t1.rotation.z = r1.eulerZ + sign * curl * 0.6;
+  if (t2 && r2) t2.rotation.z = r2.eulerZ + sign * curl * 0.4;
+}
+
 export function applyFrameToRig(frame, boneLookupObj, mapping = MOCAP_TO_AVATAR_BONE_MAP) {
-  if (!frame || !frame.bones || !boneLookupObj?.boneOrder) return;
+  if (!frame || !boneLookupObj?.boneOrder) return;
   const { bones: boneLookup, boneOrder } = boneLookupObj;
+
+  if (frame.mode === 'template') {
+    if (!frame.joints) return;
+    // Aim the arms segment by segment (shoulder before elbow; aimSegment
+    // refreshes world matrices so the elbow reads a current shoulder).
+    for (const seg of TEMPLATE_ARM_SEGMENTS) {
+      const dir = frame.joints[seg.joint];
+      if (!dir) continue;
+      const bone = boneLookup[seg.bone];
+      if (!bone) continue;
+      _tmpVec.set(dir.x, dir.y, dir.z);
+      if (_tmpVec.lengthSq() < 1e-6) continue; // zero vector = "no target", hold
+      aimSegment(bone, boneLookup[seg.child] || null, _tmpVec);
+    }
+    if (frame.rightShape) applyHandShape('right', frame.rightShape, boneLookup);
+    if (frame.leftShape) applyHandShape('left', frame.leftShape, boneLookup);
+    return;
+  }
+
+  if (!frame.bones) return;
 
   if (frame.mode === 'world-delta') {
     // Hierarchy order matters here: converting each bone's target world

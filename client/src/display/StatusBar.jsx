@@ -54,7 +54,7 @@ export default function StatusBar({ sttProvider, llmProvider, connected, coverag
           <span>
             Vocabulary coverage:{' '}
             <strong style={{ color: coverageColor(pct) }}>
-              {pct}% ({coverage.found} signed, {coverage.fingerspelled} fingerspelled, {coverage.missing} missing)
+              {pct}% ({coverage.found} signed{coverage.synth ? `, ${coverage.synth} synth` : ''}, {coverage.fingerspelled} fingerspelled, {coverage.missing} missing)
             </strong>
           </span>
         )}
