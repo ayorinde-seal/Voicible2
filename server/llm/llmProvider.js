@@ -25,6 +25,16 @@ output it as individual letters separated by hyphens for
 fingerspelling, e.g. S-A-N-C-T-I-F-I-C-A-T-I-O-N. Respond with
 only the gloss string.`;
 
+// Strips sentence punctuation a gloss token should never carry (STT
+// transcripts are natural sentences — "Hello." — and gloss/fingerspelling
+// lookups are keyed on bare words, so a stray period turns "HELLO" into
+// the unrecognizable "HELLO." and silently fails dictionary + fingerspell
+// lookup alike). Preserves hyphens, since fingerspelling tokens use them
+// as separators (S-A-N-C-T-I-F-I-C-A-T-I-O-N).
+function stripPunctuation(text) {
+  return text.replace(/[.,!?;:"'()]/g, '');
+}
+
 // Converts a chunk of transcribed English text into an ASL gloss string
 // using the configured provider. Always returns a plain uppercase gloss
 // string (space-separated tokens, hyphenated tokens for fingerspelling).
@@ -42,7 +52,7 @@ export async function convertToGloss(text) {
         gloss = await convertToGlossOllama(text, GLOSS_SYSTEM_PROMPT);
         break;
     }
-    const cleaned = (gloss || '').trim().toUpperCase();
+    const cleaned = stripPunctuation((gloss || '').trim()).toUpperCase();
     logger.gloss(text, cleaned);
     return cleaned;
   } catch (err) {
@@ -50,7 +60,7 @@ export async function convertToGloss(text) {
     // Fail safe: never crash the pipeline on an LLM hiccup. Returning the
     // raw text (uppercased) lets fingerspelling/caption fallback continue
     // rather than dropping the utterance entirely.
-    return text.trim().toUpperCase();
+    return stripPunctuation(text.trim()).toUpperCase();
   }
 }
 

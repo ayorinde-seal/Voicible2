@@ -68,4 +68,77 @@ export function activeWordForFrame(wordBoundaries, frameIndex) {
   return wordBoundaries.find((w) => frameIndex >= w.startFrame && frameIndex < w.endFrame) || null;
 }
 
-export default { NATIVE_FPS, createFrameClock, toVector3, toQuaternion, activeWordForFrame };
+// ---- Cross-sequence blending --------------------------------------------
+//
+// server/pose/poseStitcher.js blends transitions BETWEEN WORDS within one
+// stitched sequence, but with streaming (server/index.js's
+// createUtteranceChunker) a single utterance now regularly arrives as
+// several separate pose sequences queued client-side (see App.jsx's
+// poseQueueRef) — and nothing blended the boundary BETWEEN sequences,
+// so every chunk transition hard-cut. This mirrors poseStitcher.js's own
+// lerp/nlerp/easing math (kept in sync deliberately, not imported — this
+// operates on the applied-frame snapshot client-side, not stitched
+// server data) so a queued sequence's first few frames cross-fade from
+// wherever the avatar actually was, instead of snapping.
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function lerpVec3(a, b, t) {
+  return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+}
+
+function nlerpQuat(a, b, t) {
+  let [bx, by, bz, bw] = b;
+  const dot = a[0] * bx + a[1] * by + a[2] * bz + a[3] * bw;
+  if (dot < 0) { bx = -bx; by = -by; bz = -bz; bw = -bw; }
+  const x = a[0] + (bx - a[0]) * t;
+  const y = a[1] + (by - a[1]) * t;
+  const z = a[2] + (bz - a[2]) * t;
+  const w = a[3] + (bw - a[3]) * t;
+  const len = Math.hypot(x, y, z, w) || 1;
+  return [x / len, y / len, z / len, w / len];
+}
+
+// Smoothstep ease-in-out — see poseStitcher.js's blendTransition for why
+// (constant-velocity linear blending reads as mechanical).
+export function easeInOut(t) {
+  return t * t * (3 - 2 * t);
+}
+
+// Blends snapshot frame `a` toward frame `b` by fraction `t` (already
+// eased by the caller). Mismatched modes ('absolute' FBX-sourced vs
+// 'delta' JSON-fallback-sourced — see AvatarRig.js) aren't blended, same
+// rule as the server side: those live in different reference frames, so
+// interpolating raw values between them would be meaningless. Returns
+// `b` unchanged in that case (a hard cut, but not a garbled one).
+export function blendFrames(a, b, t) {
+  if (!a) return b;
+  if (!b) return a;
+  if (a.mode !== b.mode) return b;
+
+  const bones = {};
+  const boneNames = new Set([...Object.keys(a.bones || {}), ...Object.keys(b.bones || {})]);
+  for (const name of boneNames) {
+    const ab = a.bones?.[name];
+    const bb = b.bones?.[name];
+    if (ab && bb) {
+      bones[name] = {};
+      if (ab.position && bb.position) bones[name].position = lerpVec3(ab.position, bb.position, t);
+      if (ab.rotation && bb.rotation) bones[name].rotation = nlerpQuat(ab.rotation, bb.rotation, t);
+    } else {
+      bones[name] = bb || ab;
+    }
+  }
+
+  const shapekeys = {};
+  const shapekeyNames = new Set([...Object.keys(a.shapekeys || {}), ...Object.keys(b.shapekeys || {})]);
+  for (const name of shapekeyNames) {
+    shapekeys[name] = lerp(a.shapekeys?.[name] ?? 0, b.shapekeys?.[name] ?? 0, t);
+  }
+
+  return { bones, shapekeys, mode: b.mode };
+}
+
+export default { NATIVE_FPS, createFrameClock, toVector3, toQuaternion, activeWordForFrame, easeInOut, blendFrames };

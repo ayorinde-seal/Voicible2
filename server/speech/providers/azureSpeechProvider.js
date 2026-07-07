@@ -27,6 +27,21 @@ export function createAzureSpeechProvider(emitter) {
     const speechConfig = sdk.SpeechConfig.fromSubscription(config.azureSpeechKey, config.azureSpeechRegion);
     speechConfig.speechRecognitionLanguage = 'en-US';
 
+    // Segmentation strategy controls when a spoken phrase is considered
+    // "done" and a final (not just partial) transcript fires — see the
+    // config.js comment above azureSegmentationStrategy for the tradeoffs.
+    // "Semantic" (default) has no adjustable timeout; only set the pause
+    // duration when explicitly using "Time" mode, since Azure's SDK
+    // treats an irrelevant property being set at all as something to
+    // validate/reject in some versions rather than silently ignoring it.
+    speechConfig.setProperty(sdk.PropertyId.Speech_SegmentationStrategy, config.azureSegmentationStrategy);
+    if (config.azureSegmentationStrategy === 'Time') {
+      speechConfig.setProperty(
+        sdk.PropertyId.Speech_SegmentationSilenceTimeoutMs,
+        String(config.azureSegmentationSilenceTimeoutMs)
+      );
+    }
+
     pushStream = sdk.AudioInputStream.createPushStream();
     const audioConfig = sdk.AudioConfig.fromStreamInput(pushStream);
 
@@ -63,9 +78,15 @@ export function createAzureSpeechProvider(emitter) {
   }
 
   function sendAudioChunk(chunk) {
-    if (pushStream) {
-      pushStream.write(chunk);
-    }
+    if (!pushStream) return;
+    // pushStream.write() requires a real ArrayBuffer (default format is
+    // 16kHz/16-bit/mono PCM, matching what we send) — `chunk` arrives
+    // here as a Node Buffer (from ws's binary message frames), and a
+    // Buffer is a VIEW into an ArrayBuffer, not an ArrayBuffer itself
+    // (`chunk instanceof ArrayBuffer` is false), so it must be sliced
+    // out explicitly rather than passed through directly.
+    const arrayBuffer = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
+    pushStream.write(arrayBuffer);
   }
 
   return { start, stop, sendAudioChunk };

@@ -25,6 +25,12 @@ export const logger = {
       chalk.hex('#2D6BE4')('→'),
       chalk.hex('#00D4AA').bold(gloss)
     ),
+  transcript: (text, isFinal) =>
+    console.log(
+      prefix,
+      isFinal ? chalk.hex('#00D4AA')('transcript (final):') : chalk.gray('transcript (partial):'),
+      isFinal ? chalk.white.bold(text) : chalk.gray(text)
+    ),
   lookup: (word, result) => {
     if (result.found && !result.isFingerspelled) {
       console.log(prefix, chalk.hex('#00D4AA')(`  ✓ ${word}`), chalk.gray(`(dictionary sign, v=${result.dateVersion || 'undated'})`));

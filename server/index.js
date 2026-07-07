@@ -46,6 +46,64 @@ function printBanner() {
   console.log(line);
 }
 
+// Turns a stream of growing partial transcripts into discrete chunks fed
+// to `onChunk` as soon as they're ready, instead of waiting for the STT
+// provider's own `isFinal` event — which for Azure's "Semantic"
+// segmentation strategy in particular can take a very long time (it's
+// waiting for genuine topic closure, not just a pause), leaving the
+// avatar frozen the whole time. A real interpreter doesn't wait for you
+// to stop talking before starting to sign; this applies the same idea:
+// once a partial transcript stops growing for `idleMs` (a live pause),
+// whatever text is new since the last processed chunk is ready.
+//
+// Pure idle-based chunking isn't enough on its own: during genuinely
+// continuous speech (someone talking without pausing — confirmed in
+// practice, partial updates arriving in sub-second succession for many
+// seconds straight), the idle timer keeps getting reset by each new
+// partial and NEVER fires, so nothing gets signed until isFinal finally
+// shows up. `maxWaitMs` is a hard ceiling: once a chunk has been
+// accumulating for that long, flush it regardless of whether speech is
+// still ongoing — unlike the idle timer, this one is started once per
+// chunk and deliberately NOT reset on every partial.
+//
+// Tradeoff worth knowing: gloss conversion works best with full clause
+// context, so chunking too aggressively (short idleMs/maxWaitMs) can
+// produce choppier/lower-quality gloss than waiting for a complete
+// sentence would. See STREAM_CHUNK_IDLE_MS / STREAM_CHUNK_MAX_WAIT_MS.
+function createUtteranceChunker(onChunk, idleMs, maxWaitMs) {
+  let currentText = '';
+  let processedLength = 0;
+  let idleTimer = null;
+  let maxWaitTimer = null;
+
+  function flush() {
+    clearTimeout(idleTimer);
+    clearTimeout(maxWaitTimer);
+    idleTimer = null;
+    maxWaitTimer = null;
+    const newPart = currentText.slice(processedLength).trim();
+    processedLength = currentText.length;
+    if (newPart) onChunk(newPart);
+  }
+
+  return {
+    feed(text, isFinal) {
+      currentText = text;
+      if (isFinal) {
+        flush();
+        currentText = '';
+        processedLength = 0;
+      } else {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(flush, idleMs);
+        if (!maxWaitTimer) {
+          maxWaitTimer = setTimeout(flush, maxWaitMs);
+        }
+      }
+    },
+  };
+}
+
 async function processUtterance(text) {
   try {
     const rawGloss = await convertToGloss(text);
@@ -60,8 +118,12 @@ async function processUtterance(text) {
 
     broadcastStatus({ vocabularyCoverage: sequenceResult.coverage });
 
-    const stitched = stitchSequence(sequenceResult);
-    broadcastPoseSequence(stitched);
+    const stitched = await stitchSequence(sequenceResult);
+    // Carry the original spoken text ON the pose sequence so the client
+    // can show the caption in lockstep with the signing (the sequence
+    // queues client-side; its own text/gloss surface only when it plays,
+    // instead of the live transcript racing ahead of the avatar).
+    broadcastPoseSequence({ ...stitched, originalText: text });
   } catch (err) {
     logger.error(`Pipeline error processing utterance "${text}": ${err.message}`);
     broadcastError(`Failed to process: ${err.message}`);
@@ -130,26 +192,71 @@ async function main() {
     }
   });
 
+  // Debug only — injects a raw gloss string directly into the pose
+  // pipeline (vocabulary preprocessing -> mocap lookup -> pose stitching
+  // -> broadcast), bypassing STT and the LLM entirely. Lets avatar/pose
+  // playback be verified without whisper-live or Ollama running. NOT
+  // part of the live pipeline — real utterances always go through
+  // processUtterance() above, starting from transcribed text.
+  app.post('/debug/gloss', async (req, res) => {
+    const gloss = req.body?.gloss;
+    if (!gloss || typeof gloss !== 'string') {
+      return res.status(400).json({ error: 'gloss (string) is required in the request body' });
+    }
+    try {
+      const preprocessed = preprocessGloss(gloss);
+      broadcastGloss(`[debug] ${gloss}`, preprocessed);
+
+      let sequenceResult = await getSequence(preprocessed);
+      sequenceResult = await applyFuzzyFallback(sequenceResult);
+      for (const wordResult of sequenceResult.words || []) {
+        logger.lookup(wordResult.word, wordResult);
+      }
+      broadcastStatus({ vocabularyCoverage: sequenceResult.coverage });
+
+      const stitched = await stitchSequence(sequenceResult);
+      broadcastPoseSequence({ ...stitched, originalText: gloss });
+
+      res.json({ ok: true, gloss: preprocessed, coverage: sequenceResult.coverage });
+    } catch (err) {
+      logger.error(`/debug/gloss failed for "${gloss}": ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Serve the built client in production; in development the Vite dev
   // server handles the frontend separately.
   const clientDist = path.resolve(__dirname, '..', 'client', 'dist');
   app.use(express.static(clientDist));
 
   const server = http.createServer(app);
-  startBroadcaster(server);
 
   const stt = createSttProvider();
+  const chunker = createUtteranceChunker(processUtterance, config.streamChunkIdleMs, config.streamChunkMaxWaitMs);
   stt.on('transcript', ({ text, isFinal }) => {
+    if (text.trim()) logger.transcript(text, isFinal);
     broadcastCaption(text, isFinal);
-    if (isFinal && text.trim()) {
-      processUtterance(text.trim());
-    }
+    chunker.feed(text, isFinal);
   });
   stt.on('error', (err) => {
     logger.error(`STT error: ${err.message}`);
     broadcastError(`STT error: ${err.message}`);
   });
-  stt.start();
+
+  startBroadcaster(server, (chunk) => stt.sendAudioChunk(chunk));
+
+  // stt.start() is async (e.g. AzureSpeechProvider lazy-imports its SDK
+  // and awaits recognizer startup) and was previously called bare, with
+  // nothing awaiting or catching the returned promise — any rejection
+  // (a missing dependency, bad credentials, network failure) became an
+  // unhandled promise rejection, which crashes the entire Node process
+  // by default. A single misconfigured STT provider should degrade that
+  // one feature, not take down avatar playback / vocabulary lookups /
+  // everything else the server does.
+  Promise.resolve(stt.start()).catch((err) => {
+    logger.error(`STT provider failed to start: ${err.message}`);
+    broadcastError(`STT provider failed to start: ${err.message}`);
+  });
 
   server.listen(config.port, () => {
     logger.success(`HTTP server listening on http://localhost:${config.port}`);

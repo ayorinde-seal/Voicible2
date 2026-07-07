@@ -7,37 +7,72 @@
 // unintelligible to Deaf viewers. This module is therefore never treated
 // as optional: if a pose frame carries facial data, it is always applied.
 //
-// Names below are the ACTUAL 49 shapekeys on the Galtis rig's
-// "Galtismesh" object (confirmed from a real ShapeKeys.txt in the
-// archive), following the FACS (Facial Action Coding System) convention
-// per the archive's own FAQ: "Under the GaltisHead Object... you will
-// see a list of shapekeys, following the FACS measurement system." Most
-// signs only keyframe a handful of these (typically blinks) — the
-// archive's FAQ notes facial data is "usually left blank unless required
-// to complete the motion" — so don't expect every key to animate.
+// Names below are the ACTUAL 70 shapekeys on the Galtis rig's
+// "GaltisHead" object, following the FACS (Facial Action Coding System)
+// convention per the archive's own FAQ: "Under the GaltisHead Object...
+// you will see a list of shapekeys, following the FACS measurement
+// system." Confirmed 2026-07-03 by reading the full numbered shapekey
+// list out of a real ShapeKeys.txt (every sign's ShapeKeys.txt documents
+// all 70, in this same fixed order, regardless of which ones that sign
+// actually animates — cross-checked identical across two unrelated
+// signs). Most signs only keyframe a handful of these (typically blinks)
+// — the archive's FAQ notes facial data is "usually left blank unless
+// required to complete the motion" — so don't expect every key to
+// animate.
 //
-// The map is identity by default (source AU name -> same target morph
-// name) since we don't yet know a specific target avatar's own morph
-// target naming; if you retarget onto an avatar with different morph
-// names, fill in the right-hand side to match.
-const GALTIS_SHAPEKEY_NAMES = [
-  'InnerBrowRaiserL_AU1_L', 'OuterBrowRaiserL_AU2_L', 'BrowLowerL_AU4_L',
-  'EyesUpperLidRaiserL_AU5_L', 'CheekRaiserL_AU6_L', 'LidTightener_AU7',
-  'LipsTowardsEachother_AU8', 'NoseWrinklerL_AU9_L', 'UpperLipRaiserL_AU10_L',
-  'UpperLipRaiserN_AU10_N', 'NasolabialDeepenerL_AU11_L', 'LipCornerPullerL_AU12_L',
-  'SharpLipPullerL_AU13_L', 'SharpLipPullerN_AU13_N', 'DimplerL_AU14_L',
-  'LipCornerDepressorL_AU15_L', 'LowerLipDepressorL_AU16_L', 'ChinRaiser_AU17',
-  'Pucker_AU18', 'TongueShow_AU19', 'TongueShowD_AU19D', 'LipStretcherL_AU20_L',
-  'NeckTighten_AU21', 'Funneler_AU22', 'LipTightenerH_AU23H', 'LipTightenerV_AU23V',
-  'LipPressor_AU24', 'LipParts_AU25', 'JawDropLipTowards_AU26', 'JawDrop_AU27',
-  'LipSuck_AU28', 'JawThrust_AU29', 'JawSlideLeft_AU30_L', 'JawClenchL_AU31_L',
-  'LipBite_AU32', 'CheekBlowL_AU33_L', 'CheekPuffL_AU34_L', 'CheekPuffN_AU34_N',
-  'CheekSuckL_AU35_L', 'EyesCloseL_AU43_L', 'EyesCloseR_AU43_R', 'SquintL_AU44_L',
-  'EyeWinkL_AU46_L', 'EyesLookLeft_AU61', 'EyesLookRight_AU62', 'EyesLookUp_AU63',
-  'EyesLookDown_AU64', 'MouthSlideLeft', 'MouthSlideRight',
-];
-
-export const BLENDSHAPE_NAME_MAP = Object.fromEntries(GALTIS_SHAPEKEY_NAMES.map((n) => [n, n]));
+// client/public/models/avatar.glb (as of 2026-07-04) is "Kevin", a
+// Character Creator 4/5 character with its OWN 160 morph targets on the
+// CC_Base_Body mesh, using CC4/ARKit-style names (e.g. 'Eye_Blink_L',
+// 'Brow_Raise_Inner_L', 'Jaw_Open') rather than Galtis's FACS AU names.
+// Those real names were confirmed present per-accessor on Kevin's GLB and
+// patched into mesh.extras.targetNames (same technique used for Galtis,
+// see AvatarRig.js header) so three.js's GLTFLoader populates
+// morphTargetDictionary with them instead of placeholder index strings.
+// BLENDSHAPE_NAME_MAP below is therefore no longer identity — it maps
+// each Galtis AU name (the key, since that's what the pose data actually
+// carries) to its closest Kevin CC4 equivalent (the value). Only AUs with
+// a reasonably clean visual equivalent are mapped; the rest are left
+// unmapped, which is already a safe no-op (applyFacialFrame below simply
+// skips any name that isn't found in a given mesh's morphTargetDictionary).
+export const BLENDSHAPE_NAME_MAP = {
+  InnerBrowRaiserL_AU1_L: 'Brow_Raise_Inner_L',
+  InnerBrowRaiserR_AU1_R: 'Brow_Raise_Inner_R',
+  OuterBrowRaiserL_AU2_L: 'Brow_Raise_Outer_L',
+  OuterBrowRaiserR_AU2_R: 'Brow_Raise_Outer_R',
+  BrowLowerL_AU4_L: 'Brow_Drop_L',
+  BrowLowerR_AU4_R: 'Brow_Drop_R',
+  EyesUpperLidRaiserL_AU5_L: 'Eye_Wide_L',
+  EyesUpperLidRaiserR_AU5_R: 'Eye_Wide_R',
+  CheekRaiserL_AU6_L: 'Cheek_Raise_L',
+  CheekRaiserR_AU6_R: 'Cheek_Raise_R',
+  NoseWrinklerL_AU9_L: 'Nose_Sneer_L',
+  NoseWrinklerR_AU9_R: 'Nose_Sneer_R',
+  LipCornerPullerL_AU12_L: 'Mouth_Smile_L',
+  LipCornerPullerR_AU12_R: 'Mouth_Smile_R',
+  SharpLipPullerL_AU13_L: 'Mouth_Smile_Sharp_L',
+  SharpLipPullerR_AU13_R: 'Mouth_Smile_Sharp_R',
+  DimplerL_AU14_L: 'Mouth_Dimple_L',
+  DimplerR_AU14_R: 'Mouth_Dimple_R',
+  LipCornerDepressorL_AU15_L: 'Mouth_Frown_L',
+  LipCornerDepressorR_AU15_R: 'Mouth_Frown_R',
+  ChinRaiser_AU17: 'Mouth_Chin_Up',
+  JawDrop_AU27: 'Jaw_Open',
+  JawThrust_AU29: 'Jaw_Forward',
+  JawSlideLeft_AU30_L: 'Jaw_L',
+  JawSlideRight_AU30_R: 'Jaw_R',
+  CheekPuffL_AU34_L: 'Cheek_Puff_L',
+  CheekPuffR_AU34_R: 'Cheek_Puff_R',
+  CheekSuckL_AU35_L: 'Cheek_Suck_L',
+  CheekSuckR_AU35_R: 'Cheek_Suck_R',
+  EyesCloseL_AU43_L: 'Eye_Blink_L',
+  EyesCloseR_AU43_R: 'Eye_Blink_R',
+  SquintL_AU44_L: 'Eye_Squint_L',
+  SquintR_AU44_R: 'Eye_Squint_R',
+  EyesLookLeft_AU61: 'Eye_L_Look_L',
+  EyesLookRight_AU62: 'Eye_L_Look_R',
+  EyesLookUp_AU63: 'Eye_L_Look_Up',
+  EyesLookDown_AU64: 'Eye_L_Look_Down',
+};
 
 // Finds every SkinnedMesh in the avatar scene that has morph targets, so
 // facial values can be applied across all relevant meshes (head mesh,
